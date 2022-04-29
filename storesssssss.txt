@@ -1,0 +1,664 @@
+USE [CDataDB]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_unit_verification]    Script Date: 29/4/2022 6:53:04 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+/****** Object:  Stored Procedure dbo.usp_unit_verification    Script Date: 4/18/2007 11:03:57 AM ******/
+ALTER PROCEDURE [dbo].[usp_unit_verification] (
+@serial_number as varchar(32),
+@node_name as varchar(32),
+@test_type as varchar(12)
+)
+/*
+Input variable:
+@table1: this is the name of the 'unit_status' table
+@table2: this is the name of the table to compare against i.e. verification_options or eol_verification options.
+@serial_number: this is the 17 digit serial number
+@model: must be 10 digit
+This procedure assumes that the column names from both tables match exactly and that no bit column exists in one table which does not exist in the other.
+
+This procedure returs a fail count and a text string indicating the columns (processes) which failed
+2/16/07 Sam Shimabe
+2/26/07 Sam Shimabe add model=*, line_no=*,  2times fail check
+3/06/07 Sam SHimabe, add douplicate check for packing
+3/08/07 Sam Shimabe, save error message to error_log table when it occur error
+3/18/07 Sam Shimabe add  with (nolock) at 104 (checking 2 times fail) and add condition for packing douplicate check
+3/20/07 Sam Shimabe changed model is first priority then line
+3/22/07 Sam Shimabe add APT check 2 times check for 150 and 151
+6/11/07 Sam Shimabe changed pack error message.
+6/22/07 Sam Shimabe, add e-mail when result is fail.
+*/
+AS
+DECLARE @ParmDefinition nvarchar(500);
+
+declare @error_message as varchar(1000)
+declare @error_count as int
+declare @serial_num as int
+declare @entries as int
+declare @model as varchar(255)
+declare @t1_sql as nvarchar(255)
+declare @t2_sql as nvarchar(255)
+declare @t1_data as bit
+declare @t2_data as bit
+declare @table_name as varchar(255)
+declare @col_name as varchar(255)
+declare @col_name_sub as varchar(255)
+declare @Node_yes as int
+declare @Node_yes1 as int
+declare @Node_yes2 as int
+declare @line_no as varchar(20)
+declare @bar_position as int
+declare @modeltext as varchar(255)
+declare @maxdate as datetime
+declare @numfail as int
+declare @packcheck as int
+declare @esubject as varchar(1000)
+declare @sender as varchar(1000)
+
+declare @table1 as varchar(255)
+declare @table2 as varchar(255)
+
+select @table1='unit_status'
+select @table2='verification_options'
+select @esubject=''
+
+select @bar_position = charindex('-', @node_name) - 1
+if @bar_position>0
+	select @line_no=substring(@node_name,1,@bar_position)
+else
+	/*select @line_no=substring(@node_name,1,2) */
+	select @line_no=@node_name
+ 	
+select @maxdate = (select max(date_time) from defects with(nolock) where serial_number = @serial_number)
+
+if @maxdate is null
+	begin
+		select @maxdate = '1980/11/05'
+	end
+
+select @numfail = 0
+/*error count check only apt process */
+--if @test_type='104' or @test_type='119' or @test_type='103'or @test_type='166' or @test_type='167' or @test_type='170' or @test_type='171' or @test_type='172' or @test_type='109' or @test_type='193'or @test_type='194'  --add test_type by Poo 31Jun2014
+if @test_type='104' or @test_type='119' or @test_type='166' or @test_type='167' or @test_type='109' or @test_type='170' or @test_type='171' or @test_type='172' or @test_type='176' or @test_type='191' or @test_type='192' or @test_type='178' or @test_type='103' or @test_type='121' or @test_type='122' or @test_type='142' or @test_type='143' or @test_type='144' or @test_type='145' or @test_type='146' or @test_type='147' or @test_type='148' or @test_type='149' or @test_type='177' or @test_type='193' or @test_type='194' or @test_type='169' or @test_type='123' or @test_type='124' or @test_type='195' or @test_type='120' or @test_type='227' or @test_type='102' or @test_type='233' or @test_type = '229' or @test_type = '231' or @test_type = '228' or @test_type = '230' or @test_type = '232'
+
+	begin
+	if @serial_number = 'CVRT7AE2TT 500030' or @serial_number = 'CVRT7AE2TT 500033'
+		select @numfail = 0
+	else
+		/* changed  test_type = 104 to test_type = @test_type , Sam Shimabe 3/23/07 */
+		select @numfail = (select count(distinct(serial_numbers.id)) from serial_numbers with (nolock) where serial_num = @serial_number and serial_numbers.date_time > @maxdate  and serial_numbers.pass_fail = 0 and test_type = @test_type)
+		--select @numfail=1
+		end
+
+if @test_type='111' or @test_type='153'
+	begin
+		select @packcheck = count(*) from serial_numbers with (nolock) where serial_num = @serial_number and test_type = '111'
+	end 
+
+ 
+set nocount on
+
+if @serial_number='calibration 001' or @serial_number='IMIDCLR 000' or @serial_number='SAMPLEHUD'   
+begin
+	select @error_message =''
+	select @error_count = 0
+end
+
+if @table1 <> '' and @table2 <> '' and len(@serial_number)>0 and @serial_number<>'calibration 001' and @serial_number<>'IMIDCLR 000' and @serial_number<>'SAMPLEHUD'
+	begin
+		select @error_message = ''
+		select @error_count = 0
+	
+
+		if @numfail >= 2
+			begin
+				select @error_count = @error_count  + 1
+				/*select @error_message = @error_message + ' 2回連続NGです！　解析工程で確認してください。'*/
+				select @error_message = @error_message + 'This Unit has failed more than 2 times. Please send it to H0 Reapair Station.'
+				/*This Unit has failed more than 2 times. Please send it to H0 Reapair Station*/
+			end
+
+		if @packcheck > 0
+			begin
+				select @error_count = @error_count  + 1
+				/*select @error_message = @error_message + 'このセットは既に梱包されています。'*/
+				select @error_message = @error_message + 'This Unit has already packed.'
+				/*This Unit has failed more than 2 times. Please send it to H0 Reapair Station*/
+			end
+
+		/* for Benz 14 digit convert to 17digit*/
+		if len(@serial_number) = 14  and substring(@serial_number,1,2)='PA'
+			begin
+				select @serial_number = left(@serial_number,8) + '__ ' +right(@serial_number,6)
+			end
+	
+		select @model = (select models.model from models with(nolock) where charindex(models.model, @serial_number) > '0')
+				
+		select @node_yes1 = (select count(*) from verification_options with (nolock) where model = '*' and test_type = @test_type and start_date<=getdate() and end_date>=getdate() and line_no=@line_no) 
+
+		select @node_yes2 = (select count(*) from verification_options with (nolock) where model = @model and test_type = @test_type and start_date<=getdate() and end_date>=getdate() AND LINE_NO='*') 
+
+		select @node_yes = (select count(*) from verification_options with (nolock) where model = @model and test_type = @test_type and start_date<=getdate() and end_date>=getdate() and line_no=@line_no) 
+		if @node_yes = 0 and @node_yes1=0 and @node_yes2=0 
+			begin
+				select @error_message = @error_message + 'no master data as Line ' + @line_no
+				/*select @error_message = @error_message + 'マスターデータがありません。'*/
+				select @error_count = @error_count + 1
+			end 
+
+		/* 3/20/07 Sam */
+		--if @node_yes1>0 and @node_yes=0
+		--	begin
+		--		select @model = '*'
+		--	end 
+		
+		/* 3/20/07 Sam */
+		--if @node_yes2>0 and @node_yes=0
+		--	begin
+		--		select @line_no = '*'
+		--	end 
+
+		if @node_yes2>0 and @node_yes=0			
+				select @line_no='*'	
+		else if @node_yes1>0 and @node_yes=0			
+				select @model = '*'
+
+
+		select @entries = (select count(*) from unit_status with (nolock) where serial_num2 = @serial_number)
+		if @entries = 0
+			begin
+				/*select @error_message = @error_message + '投入工程（組立）でデータ読込みされていません。 '*/
+				select @error_message = @error_message + 'no data'
+				select @error_count = @error_count + 1
+			end 
+				
+
+		declare ColList cursor for
+			select substring(o.name,1,100) as Table_Name,
+			substring(c.name,1,100) as "Column Name"
+			
+			from sysobjects o
+			left join syscolumns c on (o.id=c.id)
+			left join systypes t on (c.xusertype=t.xusertype)
+			where o.type = 'U'
+			and substring(o.name,1,100)=convert(char(100),@table1)
+			and substring(t.name,1,100)=convert(char(100),'bit')
+			order by 1	
+			OPEN ColList
+				FETCH NEXT FROM ColList 
+				INTO @table_name, @col_name
+				WHILE @@FETCH_STATUS = 0
+				BEGIN
+					SET @ParmDefinition = N'@ColData bit OUTPUT';
+					
+					/*t @t1_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table1 + ' with(nolock) where model = ''' + @model + ''' and serial_num = ' + CONVERT(varchar(10),@serial_num )*/
+					set @t1_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table1 + ' with (nolock) where serial_num2  = ''' + @serial_number  + ''''				
+					set @t2_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table2 + ' with (nolock) where model = ''' +  @model + ''' and test_type = ' + @test_type + ' and line_no = ''' + @line_no + ''''
+					exec sp_executesql @t1_sql, @ParmDefinition, @ColData = @t1_data OUTPUT;
+					exec sp_executesql @t2_sql, @ParmDefinition, @ColData = @t2_data OUTPUT;
+	
+					if @t1_data = 0 and @t2_data = 1
+						begin
+							select @col_name_sub = (select description_sub from test_type with (nolock) where description = @col_name)
+							select @error_message = @error_message +  rtrim(@col_name_sub) + ', '
+							select @error_count = @error_count + 1
+						end
+					FETCH NEXT FROM ColList 
+					INTO @table_name, @col_name
+				END
+			CLOSE ColList
+		DEALLOCATE ColList
+		
+	end
+	select @error_message=convert(varchar(4),@error_count) + @error_message + ' ' + @serial_number 
+	if @error_count>0 
+		begin
+			INSERT Error_log(date_time,serial_num,node_name,test_type,comment)
+			VALUES(getdate(),@serial_number,@node_name,@test_type,@error_message)
+			/* add 6/26/07 Sam 
+			execute usp_get_email '1',@sender output
+			select @esubject=@serial_number + ' ' + @node_name + ' ' + @test_type + ' ' + @error_message
+			EXEC msdb.dbo.sp_send_dbmail @recipients=@sender, @subject = 'Previous Check Error',@body = @esubject ,@body_format = 'TEXT' ;
+			  */
+		end
+		
+			
+/*select @error_count as [Count], @error_message as [message]*/
+if @error_message is null
+	select @error_message = '1 SQL Internal Error-NULL Message detected'
+
+select @error_message as  return_string
+
+
+USE [CDataDB]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_PCB_Model_check1]    Script Date: 29/4/2022 6:53:36 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- =============================================
+-- Author:		<Author,,Name>
+-- Create date: <Create Date,,>
+-- Description:	<Description,,>
+-- =============================================
+ALTER PROCEDURE [dbo].[usp_PCB_Model_check1]
+	-- Add the parameters for the stored procedure here
+	@serial_number as varchar(20),
+	@model as varchar(32),
+	@test_type as varchar(12)
+AS
+BEGIN
+	declare @pcb_count as int
+	declare @pcbmodel as varchar(20)
+	declare @pcb as varchar(50)
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+	select @pcb = '1 Wrong model'
+
+    -- Insert statements for procedure here
+	select @pcbmodel = (select TOP(1) pcb_status.model from pcb_status with(updlock) where serial_num=@serial_number order by model desc)
+	
+	select @pcb_count = (select count(*) from deckbarcodeValidation with(updlock) where model=@model and content=@pcbmodel and type=@test_type)	
+	if @pcb_count>0 	
+	begin	
+			select @pcb ='0'
+	end
+		
+	if @serial_number='99999999'
+	begin		
+			select @pcb ='0'		
+	end
+
+	select @pcb as  return_string
+END
+USE [CDataDB]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_PCBFunc_verification_ChkICT_Down]    Script Date: 29/4/2022 6:53:57 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- Author:		<N.Pranee>
+-- Create date: <08 May 2015>
+-- Description:	<Check Process previous  >
+-- =============================================
+ALTER PROCEDURE [dbo].[usp_PCBFunc_verification_ChkICT_Down]
+	-- Add the parameters for the stored procedure here
+	@serial_number as varchar(20),
+	@model as varchar(32),
+	@test_type as varchar(12),
+	@PCB_test as varchar(12)
+
+
+AS
+BEGIN
+DECLARE @ParmDefinition nvarchar(500);
+
+	declare @pcb_count as int
+	declare @entries as int
+	declare @pcbmodel as varchar(20)
+	declare @pcb as varchar(255)	
+	declare @t1_sql as nvarchar(255)
+	declare @t2_sql as nvarchar(255)
+	declare @t1_data as bit
+	declare @t2_data as bit
+	declare @line_no as varchar(20)
+	declare @table1 as varchar(255)
+	declare @table2 as varchar(255)
+	declare @table_name as varchar(255)
+	declare @col_name as varchar(255)
+	declare @col_name_sub as varchar(255)
+	declare @error_count as varchar(255)
+	declare @Node_yes as int
+	declare @Node_yes1 as int
+	declare @Node_yes2 as int
+	/* --- Edit By Nee --- */
+	declare @Serial_New as varchar(20)
+	declare @Start as varchar(8)
+	declare @End as varchar(6)
+	declare @node as varchar(30) 
+	declare @maxdate as datetime
+	declare @maxdateS as datetime
+	declare @fail as int
+	declare @cqg as bit
+	/* --- End --- */
+
+
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+	select @pcb = '1 Wrong model'
+	select @table1='serial_numbers'
+	select @table2='verification_options'
+	--	select @error_count=0
+
+    -- Insert statements for procedure here
+	select @pcbmodel = (select TOP(1) model from pcb_status with(updlock) where serial_num=@serial_number order by model desc)
+	
+	select @pcb_count = (select count(*) from deckbarcodeValidation with(updlock) where model=@model and content=@pcbmodel and type=@PCB_test)	
+
+	select @line_no = (select line from models with(updlock) where model=@model)
+
+--	select @pcbmodel as pcbmodel
+--	select @pcb_count as pcb_count
+--	select @line_no as line_no
+
+	
+
+	if @pcb_count>0 	
+	begin	
+
+		select @pcb = ''
+		select @error_count = 0
+
+		--select @model = (select models.model from models with(nolock) where charindex(models.model, @serial_number) > '0')
+		
+		--select @node_yes1 = (select count(*) from verification_options with (nolock) where model = '*' and test_type = @test_type and start_date<=getdate() and end_date>=getdate() and line_no=@line_no) 
+
+		--select @node_yes2 = (select count(*) from verification_options with (nolock) where model = @model and test_type = @test_type and start_date<=getdate() and end_date>=getdate() and line_no='*') 
+
+		--select @node_yes = (select count(*) from verification_options with (nolock) where model = @model and test_type = @test_type and start_date<=getdate() and end_date>=getdate() and line_no=@line_no) 
+		
+		--if @node_yes = 0 and @node_yes1=0 and @node_yes2=0 
+		--begin
+		--		select @pcb = @pcb + 'no master data as Line ' + @line_no	
+		--		select @error_count = @error_count + 1			
+		--end 
+		
+		--if @node_yes2>0 and @node_yes=0			
+		--		select @line_no='*'	
+		--else if @node_yes1>0 and @node_yes=0			
+		--		select @model = '*'
+
+
+--		-------------------- Edit By Nee --------------------
+--				/* ---- Check Value ---- */
+		select @entries = (select count(*) from pcb_tests with (nolock) 
+							where serial_num = @serial_number 
+							and type = '33' 
+							and pass_fail in ('1', '0')
+							and node in ('13-13CY_AVN-ICT01',
+									'15-Honda-ICT01',
+									'17-IMID-ICT01',
+									'18-326A_Monio-ICT01',
+									'21-YP8Low-ICT01',
+									'23-LEXUS-ICT01',
+									'24-YP8G_669L-ICT01',
+									'24-YP8G_YP8L-ICT01',
+									'36-12TMAP-ICT01',
+									'37-381A-ICT01',
+									'42-J03-ICT01',
+									'42-J03_J64CY-ICT01',
+									'46-381A-ICT01',
+									'46-YP8_MMC-ICT01', '07-J64CY-ICT01', '48-Mixed_D80N-ICT01','61-20_5HMI-ICT01',
+									'49-YJX-ICT01', '63-YCA-ICT01', '59-7GCMU-ICT01','38-Monio-ICT01', '64-645B-ICT01', '94-HUD-ICT01')
+							)		---Fiexd
+--		
+		/* ---- View Value ---- */
+--		select @entries as entries
+
+		if @entries = 0 
+			begin
+				select @pcb = @pcb + '1 Not pass ICT! '
+				select @error_count = @error_count + 1		
+			end
+		else if @entries >= 1
+			begin
+
+				/* ---- failed ---- */
+				select @fail = (select Top(1) pass_fail as pass_fail from pcb_tests with(updlock) 
+								where serial_num = @serial_number 
+								and type = '33' 
+								and pass_fail in ('1', '0')
+								and node in ('13-13CY_AVN-ICT01',
+									'15-Honda-ICT01',
+									'17-IMID-ICT01',
+									'18-326A_Monio-ICT01',
+									'21-YP8Low-ICT01',
+									'23-LEXUS-ICT01',
+									'24-YP8G_669L-ICT01',
+									'24-YP8G_YP8L-ICT01',
+									'36-12TMAP-ICT01',
+									'37-381A-ICT01',
+									'42-J03-ICT01',
+									'42-J03_J64CY-ICT01',
+									'46-381A-ICT01',
+									'46-YP8_MMC-ICT01', '07-J64CY-ICT01', '48-Mixed_D80N-ICT01','61-20_5HMI-ICT01',
+									'49-YJX-ICT01', '63-YCA-ICT01', '59-7GCMU-ICT01', '64-645B-ICT01', '94-HUD-ICT01')				---Fiexd
+								order by id desc)		
+				if @fail = 0
+					begin
+						select @pcb = @pcb + '1 ICT Failed! '
+						select @error_count = @error_count + 1	
+					end 
+--				else if @fail = 1
+--					begin
+--						/* ---- cqg ---- */
+--						select @cqg = (select cqg from pcb_status with (nolock) where serial_num = @serial_number)
+--						if @cqg = '0'
+--							begin
+--								select @pcb = @pcb + '1 Not pass ICT1! '
+--								select @error_count = @error_count + 1		
+--							end
+--					end 
+				
+
+			end
+			/* ----- View Value ----- */
+--			select @fail as Fail
+--			select @cqg as Cqg
+
+		-------------------- End --------------------
+
+
+		--declare ColList cursor for
+		--select substring(o.name,1,100) as Table_Name,
+		--	substring(c.name,1,100) as "Column Name"
+			
+		--	from sysobjects o
+		--	left join syscolumns c on (o.id=c.id)
+		--	left join systypes t on (c.xusertype=t.xusertype)
+		--	where o.type = 'U'
+		--	and substring(o.name,1,100)=convert(char(100),@table1)
+		--	and substring(t.name,1,100)=convert(char(100),'bit')
+		--	and rtrim(substring(c.name,1,100)) in (select rtrim(substring(c.name,1,100))		
+		--	from sysobjects o
+		--	left join syscolumns c on (o.id=c.id)
+		--	left join systypes t on (c.xusertype=t.xusertype)
+		--	where o.type = 'U'
+		--	and substring(o.name,1,100)=convert(char(100),@table2)
+		--	and substring(t.name,1,100)=convert(char(100),'bit'))
+		--	order by 1	
+
+		--	OPEN ColList
+		--		FETCH NEXT FROM ColList 
+		--		INTO @table_name, @col_name
+		--		WHILE @@FETCH_STATUS = 0
+		--		BEGIN
+		--			SET @ParmDefinition = N'@ColData bit OUTPUT';
+					
+		--			/*t @t1_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table1 + ' with(nolock) where model = ''' + @model + ''' and serial_num = ' + CONVERT(varchar(10),@serial_num )*/
+		--			set @t1_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table1 + ' with (nolock) where serial_num  = ''' + @serial_number  + ''''				
+		--			set @t2_sql = 'select @ColData = ' + rtrim(@col_name) + ' from ' + @table2 + ' with (nolock) where model = ''' +  @model + ''' and test_type = ' + @test_type + ' and line_no = ''' + @line_no + ''''
+		--			exec sp_executesql @t1_sql, @ParmDefinition, @ColData = @t1_data OUTPUT;
+		--			exec sp_executesql @t2_sql, @ParmDefinition, @ColData = @t2_data OUTPUT;
+				
+		--			if @t1_data = 0 and @t2_data = 1
+		--				begin
+		--					select @col_name_sub = (select test_name from pcb_test_type with (nolock) where status_flag= @col_name)
+		--					select @pcb = '1 PCB test at ' +  rtrim(@col_name_sub) + ' not pass, '
+		--					select @error_count = @error_count + 1
+		--				end
+		--			FETCH NEXT FROM ColList 
+		--			INTO @table_name, @col_name
+		--		END
+		--		CLOSE ColList
+		--	DEALLOCATE ColList
+	
+			-- Return 0 if PCB is OK
+			------------select @pcb ='0'
+		if @error_count <= 0
+		begin
+			select @pcb ='0'
+		end	
+
+	end
+
+	--By pass	
+	if @serial_number='99999999'
+	begin		
+		select @pcb ='0'		
+	end
+
+	select @pcb as  return_string
+END
+
+
+
+
+USE [CDataDB]
+GO
+/****** Object:  StoredProcedure [dbo].[sp_H0_DUMMY_1]    Script Date: 29/4/2022 6:54:20 PM ******/
+SET ANSI_NULLS OFF
+GO
+SET QUOTED_IDENTIFIER OFF
+GO
+
+/****** Object:  Stored Procedure dbo.sp_H0_DUMMY_1    Script Date: 4/18/2007 10:56:59 AM ******/
+/*
+This stored procedure is used at 	   H0 Linking Station      Dummy Stored Procedure
+Sham Anandakrishnan 11/08/2006
+If override_flag = 1 then all the previous process checks will be excluded. 
+4/18/07 Sam Shimabe, changed from @serial_number char(17) to @serial_number varchar(50)
+8/23/07 Sam Shimabe, change 17digit to 20digit
+*/
+
+
+ALTER PROCEDURE [dbo].[sp_H0_DUMMY_1]
+
+(
+	@serial_number varchar(30)
+	--@model as varchar(32),
+	--@test_type as varchar(12)
+)
+ AS
+
+declare @error_message as nvarchar(4000)
+declare @out_string as nvarchar(255)
+declare @error_count as varchar(255)
+declare @Override_check as int
+
+
+select @override_check = 0
+
+select @error_count = 0
+select @error_message = ''
+
+	If @override_check = 0
+				begin
+				select @error_count = 0
+				select @error_message = ''
+				end
+	else
+	
+	
+				 begin
+			     	select @error_count = 0
+				select @error_message = ''
+	 			 end
+
+select @out_string = @error_count + @error_message + @serial_number 
+select @out_string as  return_string
+
+
+USE [CDataDB]
+GO
+/****** Object:  StoredProcedure [dbo].[sp_H0_DUMMY_1]    Script Date: 29/4/2022 6:54:53 PM ******/
+SET ANSI_NULLS OFF
+GO
+SET QUOTED_IDENTIFIER OFF
+GO
+
+/****** Object:  Stored Procedure dbo.sp_H0_DUMMY_1    Script Date: 4/18/2007 10:56:59 AM ******/
+/*
+This stored procedure is used at 	   H0 Linking Station      Dummy Stored Procedure
+Sham Anandakrishnan 11/08/2006
+If override_flag = 1 then all the previous process checks will be excluded. 
+4/18/07 Sam Shimabe, changed from @serial_number char(17) to @serial_number varchar(50)
+8/23/07 Sam Shimabe, change 17digit to 20digit
+*/
+
+
+ALTER PROCEDURE [dbo].[sp_H0_DUMMY_1]
+
+(
+	@serial_number varchar(30)
+	--@model as varchar(32),
+	--@test_type as varchar(12)
+)
+ AS
+
+declare @error_message as nvarchar(4000)
+declare @out_string as nvarchar(255)
+declare @error_count as varchar(255)
+declare @Override_check as int
+
+
+select @override_check = 0
+
+select @error_count = 0
+select @error_message = ''
+
+	If @override_check = 0
+				begin
+				select @error_count = 0
+				select @error_message = ''
+				end
+	else
+	
+	
+				 begin
+			     	select @error_count = 0
+				select @error_message = ''
+	 			 end
+
+select @out_string = @error_count + @error_message + @serial_number 
+select @out_string as  return_string
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,14 @@
+Node = 61-20_5HMI-CAS06
+Server = 10.84.57.104
+Username = sa
+Password = @sysmanager
+Test_Type = 127
+Execute_SP = True
+Stored_Procedure = Usp_unit_verification
+SP1 = USP_PCB_MODEL_CHECK1
+SP2 = USP_PCBFUNC_VERIFICATION_CHKICT_Down
+SP3 = SP_H0_DUMMY_1
+SP4 = USP_PCB_MODEL_CHECK1
+SP5 = USP_PCB_MODEL_CHECK1
+SP6 = SP_H0_DUMMY_1
+ModelSelection = 1

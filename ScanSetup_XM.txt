@@ -1,0 +1,6 @@
+Scan1 = 6,Sub PCB Final
+Scan2 = 13,MM PCB
+Scan3 = 70,TFT IC Ver.2
+Scan4 = 99,Select
+Scan5 = 99,Select
+Scan6 = 99,Select
